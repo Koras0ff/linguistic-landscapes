@@ -102,10 +102,6 @@ h1,h2,.mono,.count,button,label,select,.legend{font-family:"IBM Plex Mono",monos
 .opt .c{margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted)}
 .opt.hidden{display:none}
 
-/* Hierarchy Styles */
-.opt.is-child { padding-left: 24px; border-left: 1px solid var(--line); margin-left: 6px; font-size: 12px; }
-.opt.is-parent { font-weight: 500; }
-
 .nohit{font-size:11px;color:var(--muted);font-style:italic;padding:3px 0}
 .morebtn{
   margin-top:4px;background:none;border:none;padding:3px 0;cursor:pointer;
@@ -320,6 +316,38 @@ path.leaflet-interactive{outline:none}
 #about li{font-size:13.5px;line-height:1.5;margin-bottom:3px}
 #about a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent)}
 #about a:hover{color:#000;border-bottom-color:#000}
+
+/* ---- IMAGE GALLERY (right panel, one-by-one browser) ---- */
+.dashbtn{
+  margin-top:12px;width:100%;background:var(--ink);color:var(--bg);border:none;border-radius:4px;
+  padding:8px;font-size:12px;cursor:pointer;font-family:"IBM Plex Mono",monospace;letter-spacing:.04em;
+}
+.dashbtn:hover{background:#000}
+.gal-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px 0;flex-wrap:wrap}
+.gal-nav{display:flex;align-items:center;gap:8px}
+.galbtn{background:var(--ink);color:var(--bg);border:none;border-radius:4px;width:30px;height:28px;
+  font-size:15px;line-height:1;cursor:pointer;font-family:"IBM Plex Mono",monospace}
+.galbtn:hover{background:#000}
+.galbtn:disabled{opacity:.35;cursor:default}
+.galcount{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);min-width:64px;text-align:center}
+.gal-note{margin:10px 16px 0;padding:8px 10px;background:var(--bg);border:1px solid var(--accent);
+  border-radius:3px;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--accent);line-height:1.4}
+.gal-sign + .gal-sign{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.gal-signhdr{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+
+/* ---- RESPONSIVE: keep both panels reachable when the browser is zoomed / narrow ---- */
+@media (max-width:1200px){ #detail{width:320px;min-width:320px;flex-basis:320px} }
+@media (max-width:1000px){
+  #detail{width:280px;min-width:280px;flex-basis:280px}
+  #sidebar{width:280px;min-width:280px;flex-basis:280px}
+}
+@media (max-width:820px){
+  body{overflow-x:auto}            /* scroll to the panels instead of losing them */
+  #sidebar{width:260px;min-width:260px;flex-basis:260px}
+  #detail{width:300px;min-width:300px;flex-basis:300px}
+  #map{min-width:340px}
+}
 #about .closebtn{
   margin-top:20px;background:var(--ink);color:var(--bg);border:none;border-radius:4px;
   padding:8px 16px;font-size:12px;cursor:pointer;font-family:"IBM Plex Mono",monospace;
@@ -357,6 +385,7 @@ path.leaflet-interactive{outline:none}
       Size <input type="range" id="markerSize" min="2" max="16" step="1" value="7" style="flex:1">
       <span id="markerSizeVal" class="mono">7 px</span>
     </label>
+    <button class="resetbtn" id="fitBtn">Fit map to results</button>
     <button class="resetbtn" id="reset">Reset all filters</button>
     <div class="count" id="count"></div>
   </footer>
@@ -435,7 +464,7 @@ path.leaflet-interactive{outline:none}
 </script>
 <script>
 // ====== DATA & DYNAMIC CONFIGURATION ======
-const PHOTO_DIR = "images/";
+const PHOTO_DIR = "../../lilabi-src/data/images/";
 const CATEGORIES = ["Category", "Subcategory", "Linguality", "Directedness", "Discourse", "Language", "Script"];
 const METADATA_JSON = [
   {
@@ -18965,23 +18994,12 @@ function init(records){
   DATA = records;
 
   // Initialize UI State dynamically
-  CATEGORIES.forEach((cat, index) => {
+  CATEGORIES.forEach((cat) => {
       state.filters[cat] = new Set();
       state.mode[cat] = "or";
-      // Keep the first 3 categories open by default, collapse the rest to save space
       ui[cat] = { q: "", sort: "count", collapsed: true, expanded: false };
-      
-      // Inject hierarchy parsing universally for all categories
-      DATA.forEach(r => {
-          const expanded = new Set();
-          r.attributes[cat].forEach(val => {
-             expanded.add(val);
-             if (val.includes("(")) {
-                 expanded.add(val.split(" (")[0].trim());
-             }
-          });
-          r.attributes[cat] = Array.from(expanded);
-      });
+      // De-duplicate each record's values for this category.
+      DATA.forEach(r => { r.attributes[cat] = [...new Set(r.attributes[cat])]; });
   });
 
   // Setup Color By Dropdown
@@ -19004,8 +19022,12 @@ function init(records){
 
   // Initialize Map
   map = L.map("map").setView([42.87, 74.59], 12);
-  const tiles = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",{
-    attribution:'&copy; OpenStreetMap, &copy; CARTO', maxZoom:20
+  // Keyless light basemap (Esri World Light Gray). CARTO's basemap tiles now
+  // require an API key, so we use Esri's free label-free gray canvas instead.
+  // Native tiles go to z16; maxZoom 19 upsamples them for close inspection.
+  const tiles = L.tileLayer("https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",{
+    attribution:'Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors',
+    maxNativeZoom:16, maxZoom:19
   });
   tiles.addTo(map);
 
@@ -19055,11 +19077,16 @@ function init(records){
     if(document.getElementById("heatToggle").checked) render();
   };
   document.getElementById("reset").onclick = ()=>{
-    CATEGORIES.forEach(cat => state.filters[cat].clear());
-    CATEGORIES.forEach(cat => ui[cat].q = "");
-    buildFilters(); 
+    CATEGORIES.forEach(cat => {
+      state.filters[cat].clear();
+      ui[cat].q = "";
+      ui[cat].collapsed = true;      // restore the collapsed / top-5 state
+      ui[cat].expanded = false;
+    });
+    buildFilters();
     render(true);
   };
+  document.getElementById("fitBtn").onclick = ()=> fitToVisible(lastVisible);
 }
 
 function fitToAll(){ fitToVisible(DATA); }
@@ -19149,23 +19176,6 @@ function sortEntries(entries, mode){
   return arr;
 }
 
-// Builds a nested hierarchy universally
-function buildHierarchy(entries) {
-    const hierarchy = {};
-    entries.forEach(([val, count]) => {
-        if (val.includes("(")) {
-            const parent = val.split(" (")[0].trim();
-            const childName = val.split("(")[1].replace(")", "").trim();
-            if (!hierarchy[parent]) hierarchy[parent] = { count: 0, children: [] };
-            hierarchy[parent].children.push({ val, name: "- " + childName, count });
-        } else {
-            if (!hierarchy[val]) hierarchy[val] = { count: count, children: [] };
-            else hierarchy[val].count = count;
-        }
-    });
-    return hierarchy;
-}
-
 function buildFilters(){
   const root = document.getElementById("filters");
   root.innerHTML = "";
@@ -19205,21 +19215,11 @@ function buildFilters(){
     const q = u.q.trim().toLowerCase();
     let shown = 0;
 
-    const hierarchy = buildHierarchy(entries);
-    const sortedParents = Object.keys(hierarchy).sort((a,b) => {
-        if (u.sort === "alpha") return a.localeCompare(b);
-        return hierarchy[b].count - hierarchy[a].count;
-    });
-
-    // Parents matching the current search.
-    const matching = sortedParents.filter(parent => {
-        const hitP = !q || parent.toLowerCase().includes(q);
-        const hitC = hierarchy[parent].children.some(c => !q || c.val.toLowerCase().includes(q));
-        return hitP || hitC;
-    });
+    // Flat option list (each value with its count), filtered by the search box.
+    const matching = entries.filter(([val]) => !q || val.toLowerCase().includes(q));
 
     // Show only the top 5 by default; a search or the "show all" button reveals the
-    // rest. Selected parents are always shown so active filters stay visible.
+    // rest. Checked values are always shown so active filters stay visible.
     const LIMIT = 5;
     const showAll = u.expanded || !!q;
     let renderList;
@@ -19227,43 +19227,19 @@ function buildFilters(){
         renderList = matching;
     } else {
         const head = matching.slice(0, LIMIT);
-        const checkedTail = matching.slice(LIMIT).filter(p =>
-            state.filters[cat].has(p) || hierarchy[p].children.some(c => state.filters[cat].has(c.val)));
+        const checkedTail = matching.slice(LIMIT).filter(([val]) => state.filters[cat].has(val));
         renderList = head.concat(checkedTail);
     }
 
-    renderList.forEach(parent => {
-        const hitParent = !q || parent.toLowerCase().includes(q);
-        const childrenHits = hierarchy[parent].children.filter(c => !q || c.val.toLowerCase().includes(q));
-        {
-            shown++;
-            const lab=document.createElement("label");
-            lab.className="opt is-parent" + (hitParent || childrenHits.length > 0 ? "" : " hidden");
-            lab.innerHTML=`<input type="checkbox" class="cb-parent" data-k="${cat}" value="${parent}"
-                           ${state.filters[cat].has(parent)?"checked":""}>
-                         <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${cat === currentColorCategory ? colorFor(parent) : 'var(--line)'};margin-right:6px"></span>${parent}</span>
-                         <span class="c">${hierarchy[parent].count}</span>`;
-            list.appendChild(lab);
-
-            const sortedChildren = hierarchy[parent].children.sort((a,b) => {
-                if (u.sort === "alpha") return a.name.localeCompare(b.name);
-                return b.count - a.count;
-            });
-
-            sortedChildren.forEach(child => {
-                const hitChild = !q || child.val.toLowerCase().includes(q);
-                const isChecked = state.filters[cat].has(child.val) || state.filters[cat].has(parent);
-                if(isChecked) state.filters[cat].add(child.val);
-
-                const clab=document.createElement("label");
-                clab.className="opt is-child" + (hitChild || hitParent ? "" : " hidden");
-                clab.innerHTML=`<input type="checkbox" class="cb-child" data-k="${cat}" data-parent="${parent}" value="${child.val}"
-                               ${isChecked ?"checked":""}>
-                             <span>${child.name}</span>
-                             <span class="c">${child.count}</span>`;
-                list.appendChild(clab);
-            });
-        }
+    renderList.forEach(([val, count]) => {
+        shown++;
+        const lab = document.createElement("label");
+        lab.className = "opt";
+        lab.innerHTML = `<input type="checkbox" class="cb" data-k="${cat}" value="${val}"
+                         ${state.filters[cat].has(val) ? "checked" : ""}>
+                       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${cat === currentColorCategory ? colorFor(val) : 'var(--line)'};margin-right:6px"></span>${val}</span>
+                       <span class="c">${count}</span>`;
+        list.appendChild(lab);
     });
 
     if(shown===0){
@@ -19288,38 +19264,11 @@ function buildFilters(){
 }
 
 function wireFilterEvents(root){
-  root.querySelectorAll('.cb-parent').forEach(cb => {
-      cb.onchange = (e) => {
-          const k = cb.dataset.k;
-          const v = cb.value;
-          const children = root.querySelectorAll(`.cb-child[data-parent="${v}"][data-k="${k}"]`);
-          
-          if(cb.checked) {
-              state.filters[k].add(v);
-              children.forEach(c => { c.checked = true; state.filters[k].add(c.value); });
-          } else {
-              state.filters[k].delete(v);
-              children.forEach(c => { c.checked = false; state.filters[k].delete(c.value); });
-          }
-          render(true);
-      };
-  });
-
-  root.querySelectorAll('input[type=checkbox]:not(.cb-parent)').forEach(cb=>{
+  root.querySelectorAll('input.cb').forEach(cb=>{
     cb.onchange=()=>{
       const k=cb.dataset.k, v=cb.value;
-      if (cb.checked) {
-          state.filters[k].add(v);
-      } else {
-          state.filters[k].delete(v);
-          if (cb.classList.contains('cb-child')) {
-              const parentVal = cb.dataset.parent;
-              const parentCb = root.querySelector(`.cb-parent[value="${parentVal}"][data-k="${k}"]`);
-              if (parentCb) parentCb.checked = false;
-              state.filters[k].delete(parentVal);
-          }
-      }
-      render(true);
+      if(cb.checked) state.filters[k].add(v); else state.filters[k].delete(v);
+      render();
     };
   });
 
@@ -19327,12 +19276,12 @@ function wireFilterEvents(root){
     b.onclick=()=>{
       state.mode[b.dataset.k]=b.dataset.m;
       b.parentNode.querySelectorAll('button').forEach(x=>x.classList.remove("on"));
-      b.classList.add("on"); render(true);
+      b.classList.add("on"); render();
     };
   });
-  
+
   root.querySelectorAll('.clear').forEach(s=>{
-    s.onclick=()=>{ state.filters[s.dataset.k].clear(); buildFilters(); render(true); };
+    s.onclick=()=>{ state.filters[s.dataset.k].clear(); buildFilters(); render(); };
   });
 
   root.querySelectorAll('.fsearch').forEach(inp=>{
@@ -19429,6 +19378,7 @@ function render(refit){
   document.getElementById("count").textContent = `${visible.length} of ${DATA.length} signs shown`;
   updateStats(visible);
   if(currentView === "dashboard") renderDashboard(visible);
+  else if(currentView === "gallery") showGallery(galleryIndex);   // keep gallery in sync with the filter
   if(refit) fitToVisible(visible);
 }
 
@@ -19466,14 +19416,19 @@ function langCounts(records){
   records.forEach(r=>diversityLangs(r).forEach(l=>{ counts[l]=(counts[l]||0)+1; }));
   return counts;
 }
-// Snap each sign to a GRID_METERS grid; return one square cell per grid with its
-// bounds, Simpson index and sign count.
+// Snap each sign to a grid that is gridMeters on a side *on the ground*.
+// A degree of longitude is shorter than a degree of latitude by cos(latitude),
+// so latitude and longitude use different degree-per-cell sizes; without this the
+// cells would be ~27% wider east-west than north-south at Bishkek's latitude.
+const LAT0 = 42.87;                                   // Bishkek reference latitude
+const COS_LAT0 = Math.cos(LAT0 * Math.PI / 180);
 function diversityGrid(records){
-  const H = gridMeters/METERS_PER_DEGREE;   // cell size in degrees
+  const Hlat = gridMeters / METERS_PER_DEGREE;              // cell height in deg
+  const Hlon = gridMeters / (METERS_PER_DEGREE * COS_LAT0); // cell width in deg
   const grid={};
   records.forEach(r=>{
-    const g = Math.round(r.coordinates[0]*METERS_PER_DEGREE/gridMeters);
-    const o = Math.round(r.coordinates[1]*METERS_PER_DEGREE/gridMeters);
+    const g = Math.round(r.coordinates[0] / Hlat);
+    const o = Math.round(r.coordinates[1] / Hlon);
     const key = g+"_"+o;
     if(!grid[key]) grid[key]={g,o,counts:{},n:0,records:[]};
     grid[key].n++;
@@ -19481,8 +19436,8 @@ function diversityGrid(records){
     diversityLangs(r).forEach(l=>{ grid[key].counts[l]=(grid[key].counts[l]||0)+1; });
   });
   return Object.values(grid).map(cell=>{
-    const latC = cell.g*H, lonC = cell.o*H;
-    return { bounds:[[latC-H/2, lonC-H/2],[latC+H/2, lonC+H/2]],
+    const latC = cell.g*Hlat, lonC = cell.o*Hlon;
+    return { bounds:[[latC-Hlat/2, lonC-Hlon/2],[latC+Hlat/2, lonC+Hlon/2]],
              value: simpson(cell.counts), n: cell.n, records: cell.records };
   });
 }
@@ -19603,7 +19558,7 @@ function catOptions(sel){
   return CATEGORIES.map(c=>`<option value="${c}"${c===sel?" selected":""}>${c}</option>`).join("");
 }
 
-function showDashboard(){ currentView = "dashboard"; renderDashboard(lastVisible.length?lastVisible:DATA); }
+function showDashboard(){ currentView = "dashboard"; clearHighlight(); renderDashboard(lastVisible.length?lastVisible:DATA); }
 
 function renderDashboard(records){
   const el = document.getElementById("detail");
@@ -19611,6 +19566,7 @@ function renderDashboard(records){
     <div class="dash-head">
       <h4>Selection analysis</h4>
       <p>${records.length} sign(s) in current filter. Click a sign for its detail.</p>
+      <button class="dashbtn" id="galEnter">▸ Browse ${new Set(records.map(r=>r.name)).size} photo(s) one by one</button>
     </div>
     <div class="dash-sec">
       <h5>Composition</h5>
@@ -19630,23 +19586,103 @@ function renderDashboard(records){
   const reXtab = ()=>{ document.getElementById("dashXtab").innerHTML = crossTabHTML(lastVisible, xRow, xCol); };
   document.getElementById("dashRow").onchange = e=>{ xRow=e.target.value; reXtab(); };
   document.getElementById("dashCol").onchange = e=>{ xCol=e.target.value; reXtab(); };
+  document.getElementById("galEnter").onclick = ()=> showGallery(0);
 }
+
+// Shared attribute-row markup (drops a parent value when a "parent (child)" of it
+// is also present, so the panel shows the specific value, not both).
+function attrRowsHTML(rec){
+  let h = "";
+  CATEGORIES.forEach(cat => {
+    const vals = rec.attributes[cat];
+    if (vals && vals.length > 0) {
+      const disp = vals.filter(c => !vals.some(o => o !== c && o.startsWith(c + " (")));
+      if (disp.length > 0) h += `<div class="attr-row"><b>${cat}</b> ${disp.join(" · ")}</div>`;
+    }
+  });
+  return h;
+}
+
+// ====== IMAGE GALLERY: step through the filtered set one photo at a time ======
+// The gallery is sign-based, but signs that share a photograph are grouped onto
+// one page (so a photo is never shown twice); that page notes how many signs are
+// on the photo and lists each one's metadata.
+let galleryIndex = 0;
+// Group the current filtered signs by photo, preserving first-seen order.
+function galleryPages(){
+  const byImage = new Map();
+  const order = [];
+  lastVisible.forEach(r=>{
+    if(!byImage.has(r.name)){ byImage.set(r.name, []); order.push(r.name); }
+    byImage.get(r.name).push(r);
+  });
+  return order.map(name => ({ name, signs: byImage.get(name) }));
+}
+function showGallery(i){
+  currentView = "gallery";
+  const pages = galleryPages();
+  const el = document.getElementById("detail");
+  if(pages.length === 0){
+    el.innerHTML = `<div class="gal-head"><button class="backbtn" onclick="showDashboard()">← Back to analysis</button></div>
+      <div class="empty">No signs in the current filter.</div>`;
+    return;
+  }
+  galleryIndex = Math.max(0, Math.min(i, pages.length - 1));
+  const page = pages[galleryIndex];
+  const file = PHOTO_DIR + page.name;
+  const multi = page.signs.length > 1;
+  const cap = multi ? `${page.signs.length} signs · ${page.name}` : page.name;
+
+  const note = multi
+    ? `<div class="gal-note">This photograph includes ${page.signs.length} signs — each sign's metadata is shown below.</div>`
+    : "";
+
+  const bodies = page.signs.map((rec, k) => `
+    <div class="gal-sign">
+      ${multi ? `<div class="gal-signhdr">Sign ${k+1} of ${page.signs.length}</div>` : ""}
+      ${attrRowsHTML(rec) || "<i>No metadata</i>"}
+      <div class="coords">${rec.sign_id ? rec.sign_id + "<br>" : ""}${rec.coordinates[0].toFixed(6)}, ${rec.coordinates[1].toFixed(6)}</div>
+    </div>`).join("");
+
+  el.innerHTML = `
+    <div class="gal-head">
+      <button class="backbtn" onclick="showDashboard()">← Back to analysis</button>
+      <div class="gal-nav">
+        <button class="galbtn" onclick="galleryStep(-1)" ${galleryIndex===0?"disabled":""} title="Previous (←)">‹</button>
+        <span class="galcount">${galleryIndex+1} / ${pages.length}</span>
+        <button class="galbtn" onclick="galleryStep(1)" ${galleryIndex===pages.length-1?"disabled":""} title="Next (→)">›</button>
+      </div>
+    </div>
+    <img src="${file}" alt="${page.name}" class="detailimg" title="Click to enlarge"
+         onclick="openLightbox('${file}', '${cap}')" onerror="this.style.display='none'">
+    ${note}
+    <div class="detail-body">${bodies}</div>`;
+
+  focusOn(page.signs[0].coordinates);
+}
+function galleryStep(d){ showGallery(galleryIndex + d); }
+
+// Ring the current sign on the map, and pan to it only if it's off-screen.
+let highlightMarker = null;
+function focusOn(coord){
+  if(!map) return;
+  if(!highlightMarker){
+    highlightMarker = L.circleMarker(coord, {radius:markerRadius+6, color:"#111", weight:2, fill:false});
+    highlightMarker.addTo(map);
+  } else {
+    highlightMarker.setLatLng(coord);
+  }
+  if(!map.getBounds().contains(coord)) map.panTo(coord, {animate:true});
+}
+function clearHighlight(){ if(highlightMarker){ map.removeLayer(highlightMarker); highlightMarker=null; } }
 
 // ====== RIGHT DETAIL PANEL ======
 function showDetail(rec){
   currentView = "sign";
   const file = PHOTO_DIR + rec.name;
+  const cap = rec.sign_id || rec.name;
 
-  let attrHtml = "";
-  CATEGORIES.forEach(cat => {
-      const vals = rec.attributes[cat];
-      if (vals && vals.length > 0) {
-          const displayVals = vals.filter(c => !vals.some(other => other !== c && other.startsWith(c + " (")));
-          if (displayVals.length > 0) {
-              attrHtml += `<div class="attr-row"><b>${cat}</b> ${displayVals.join(" · ")}</div>`;
-          }
-      }
-  });
+  const attrHtml = attrRowsHTML(rec);
 
   const back = lastGridCell
     ? `<button class="backbtn" onclick="showGridDetail(lastGridCell)">← Back to grid</button>`
@@ -19654,16 +19690,18 @@ function showDetail(rec){
   document.getElementById("detail").innerHTML = `
     ${back}
     <img src="${file}" alt="${rec.name}" class="detailimg" title="Click to enlarge"
-         onclick="openLightbox('${file}','')" onerror="this.style.display='none'">
+         onclick="openLightbox('${file}', '${cap}')" onerror="this.style.display='none'">
     <div class="detail-body">
       ${attrHtml || "<i>No metadata</i>"}
       <div class="coords">${rec.sign_id ? rec.sign_id + "<br>" : ""}${rec.coordinates[0].toFixed(6)}, ${rec.coordinates[1].toFixed(6)}</div>
     </div>`;
+  focusOn(rec.coordinates);
 }
 
 // Clicking a diversity grid cell lists the signs inside it as thumbnails.
 function showGridDetail(cell){
   currentView = "grid";
+  clearHighlight();
   lastGridCell = cell;
   const lc = langCounts(cell.records);
   const nl = Object.keys(lc).length;
@@ -19720,7 +19758,17 @@ document.addEventListener("keydown", e=>{
     document.getElementById("lightbox").classList.remove("show");
     closeAbout();
   }
+  // Arrow keys step through the gallery (only while browsing, lightbox closed).
+  const lbOpen = document.getElementById("lightbox").classList.contains("show");
+  if(currentView === "gallery" && !lbOpen){
+    if(e.key === "ArrowLeft"){ e.preventDefault(); galleryStep(-1); }
+    else if(e.key === "ArrowRight"){ e.preventDefault(); galleryStep(1); }
+  }
 });
+
+// Keep the Leaflet map sized to its container after any viewport change (browser
+// zoom, window resize). Without this the map can render blank until a reload.
+window.addEventListener("resize", ()=>{ if(map) map.invalidateSize(); });
 </script>
 </body>
 </html>
