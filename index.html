@@ -273,17 +273,25 @@ table.xtab td.z{color:var(--line)}
 table.xtab td.dg{outline:1px solid var(--accent)}
 .xtab-note{font-size:10px;color:var(--muted);margin-top:6px;font-style:italic}
 
+/* zone comparison table (districts) */
+table.cmptab{border-collapse:collapse;font-family:"IBM Plex Mono",monospace;font-size:10px;width:100%}
+table.cmptab th,table.cmptab td{border:1px solid var(--line);padding:3px 5px;text-align:center;white-space:nowrap}
+table.cmptab th{background:var(--bg);color:var(--muted);font-weight:500}
+table.cmptab td.zl,table.cmptab th.zl{text-align:left}
+table.cmptab td.zt{text-align:left;font-family:"Spectral",serif;max-width:120px;overflow:hidden;text-overflow:ellipsis}
+table.cmptab .zdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+
 /* ---- DISTRICT LEGEND ---- */
 #district-legend{
   display:none;position:absolute;bottom:20px;left:16px;z-index:1200;
   background:var(--bg);border:1px solid var(--line);border-radius:2px;
   padding:9px 11px;box-shadow:0 4px 18px rgba(0,0,0,.15);
-  font-family:"IBM Plex Mono",monospace;font-size:10px;
+  font-family:"IBM Plex Mono",monospace;font-size:10px;max-height:44vh;overflow-y:auto;
 }
 #district-legend.show{display:block}
 #district-legend .dt{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink);margin-bottom:6px}
 #district-legend .dr{display:flex;align-items:center;gap:7px;padding:1px 0;color:var(--muted)}
-#district-legend .sw{width:14px;height:10px;border-radius:2px;border:1px solid rgba(0,0,0,.2)}
+#district-legend .sw{width:14px;height:10px;border-radius:2px;border:1px solid rgba(0,0,0,.2);flex-shrink:0}
 /* Kill the browser focus box drawn around clicked map polygons; we highlight the
    actual border instead (see buildDistricts hover handlers). */
 .leaflet-interactive:focus{outline:none}
@@ -380,7 +388,7 @@ path.leaflet-interactive{outline:none}
       <span id="gridSizeVal" class="mono">200 m</span>
     </label>
     <label class="toggle"><input type="checkbox" id="markerToggle" checked> Show markers</label>
-    <label class="toggle"><input type="checkbox" id="districtToggle" checked> Highlight districts</label>
+    <label class="toggle"><input type="checkbox" id="districtToggle"> Show district borders</label>
     <label class="toggle" style="gap:10px">
       Size <input type="range" id="markerSize" min="2" max="16" step="1" value="7" style="flex:1">
       <span id="markerSizeVal" class="mono">7 px</span>
@@ -19032,8 +19040,7 @@ function init(records){
   tiles.addTo(map);
 
   // Districts sit below markers/heat in their own pane so signs stay clickable.
-  map.createPane("districtsPane");
-  map.getPane("districtsPane").style.zIndex = 350;
+  map.createPane("districtsPane"); map.getPane("districtsPane").style.zIndex = 350;
   buildDistricts();
   if(districtLayer && document.getElementById("districtToggle").checked) districtLayer.addTo(map);
   buildDistrictLegend();
@@ -19104,34 +19111,36 @@ function colorFor(val){
   return CONCEPT_COLORS[baseVal];
 }
 
-// ====== DISTRICTS ======
-function buildDistricts(){
-  if(!DISTRICTS.features || DISTRICTS.features.length===0){ districtLayer=null; return; }
-  districtLayer = L.geoJSON(DISTRICTS, {
-    pane:"districtsPane",
-    style: f => {
-      const c = DISTRICT_COLORS[f.properties.name] || "#777";
-      return { color:c, weight:2, opacity:0.9, fillColor:c, fillOpacity:0.07 };
-    },
+// ====== DISTRICT ZONE LAYER ======
+// A polygon overlay that highlights its boundary on hover and shows a live count.
+function buildZoneLayer(fc, colorsMap, pane){
+  if(!fc.features || fc.features.length===0) return null;
+  const lyr = L.geoJSON(fc, {
+    pane,
+    style: f => { const c = colorsMap[f.properties.name] || "#777";
+      return { color:c, weight:2, opacity:0.9, fillColor:c, fillOpacity:0.06 }; },
     onEachFeature: (f,layer)=>{
       layer.bindTooltip(f.properties.name, {sticky:true});
-      // Highlight the actual boundary line on hover (thicker, opaque, no fill),
-      // instead of a filled box.
+      // Highlight the actual boundary line on hover, not a filled box.
       layer.on("mouseover", ()=> layer.setStyle({weight:4, opacity:1, fillOpacity:0.02}));
-      layer.on("mouseout",  ()=> districtLayer.resetStyle(layer));
+      layer.on("mouseout",  ()=> lyr.resetStyle(layer));
     }
   });
+  return lyr;
 }
-function buildDistrictLegend(){
-  const el = document.getElementById("district-legend");
-  if(!DISTRICTS.features || DISTRICTS.features.length===0){ el.classList.remove("show"); return; }
-  el.innerHTML = `<div class="dt">Districts</div>` +
-    DISTRICTS.features.map(f=>{
-      const c = DISTRICT_COLORS[f.properties.name] || "#777";
-      return `<div class="dr"><span class="sw" style="background:${c}"></span>${f.properties.name}</div>`;
-    }).join("");
-  if(document.getElementById("districtToggle").checked) el.classList.add("show");
+function buildDistricts(){ districtLayer = buildZoneLayer(DISTRICTS, DISTRICT_COLORS, "districtsPane"); }
+
+function buildZoneLegend(elId, fc, colorsMap, title, toggleId){
+  const el = document.getElementById(elId);
+  if(!el) return;
+  if(!fc.features || fc.features.length===0){ el.classList.remove("show"); return; }
+  el.innerHTML = `<div class="dt">${title}</div>` +
+    fc.features.map(f=>{ const c = colorsMap[f.properties.name] || "#777";
+      return `<div class="dr"><span class="sw" style="background:${c}"></span>${f.properties.name}</div>`; }).join("");
+  if(document.getElementById(toggleId).checked) el.classList.add("show");
 }
+function buildDistrictLegend(){ buildZoneLegend("district-legend", DISTRICTS, DISTRICT_COLORS, "Districts", "districtToggle"); }
+
 // Ray-casting point-in-polygon. ring is [[lon,lat],...]; point is (lat,lon).
 function pointInRing(lat, lon, ring){
   let inside=false;
@@ -19141,23 +19150,54 @@ function pointInRing(lat, lon, ring){
   }
   return inside;
 }
-function districtOf(coord){
+// Name of the feature in `fc` containing [lat,lon], or null.
+function zoneOf(coord, fc){
   const lat=coord[0], lon=coord[1];
-  for(const f of DISTRICTS.features){
+  for(const f of fc.features){
     const g=f.geometry;
     const polys = g.type==="MultiPolygon" ? g.coordinates : [g.coordinates];
     for(const poly of polys){ if(pointInRing(lat,lon,poly[0])) return f.properties.name; }
   }
   return null;
 }
-function updateDistrictCounts(visible){
-  if(!districtLayer) return;
-  const c={}; DISTRICTS.features.forEach(f=>c[f.properties.name]=0);
-  visible.forEach(r=>{ const d=districtOf(r.coordinates); if(d!=null) c[d]++; });
-  districtLayer.eachLayer(l=>{
-    const nm=l.feature.properties.name;
-    l.setTooltipContent(`${nm} · ${c[nm]} sign(s) in view`);
-  });
+function districtOf(coord){ return zoneOf(coord, DISTRICTS); }
+
+function updateZoneCounts(layer, fc, visible){
+  if(!layer) return;
+  const c={}; fc.features.forEach(f=>c[f.properties.name]=0);
+  visible.forEach(r=>{ const z=zoneOf(r.coordinates, fc); if(z!=null) c[z]++; });
+  layer.eachLayer(l=>{ const nm=l.feature.properties.name;
+    l.setTooltipContent(`${nm} · ${c[nm]} sign(s) in view`); });
+}
+function updateDistrictCounts(visible){ updateZoneCounts(districtLayer, DISTRICTS, visible); }
+
+// ====== ZONE COMPARISON TABLE (districts side by side) ======
+function zoneComparisonHTML(records, fc, colorsMap, showOutside){
+  if(!fc.features || fc.features.length===0) return "";
+  const bucket = {}; fc.features.forEach(f=>bucket[f.properties.name]=[]);
+  const outside = [];
+  records.forEach(r=>{ const z=zoneOf(r.coordinates, fc); if(z!=null) bucket[z].push(r); else outside.push(r); });
+
+  const rowFor = (name, recs, color)=>{
+    const lc = langCounts(recs);
+    const nMulti = recs.filter(r=> new Set(diversityLangs(r)).size>=2).length;
+    const top = Object.entries(lc).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,3).map(e=>e[0]).join(", ") || "—";
+    const div = recs.length ? simpson(lc).toFixed(3) : "—";
+    const pct = recs.length ? Math.round(100*nMulti/recs.length)+"%" : "—";
+    const dot = color ? `<span class="zdot" style="background:${color}"></span>` : "";
+    return `<tr><td class="zl">${dot}${name}</td><td>${recs.length}</td><td>${div}</td><td>${pct}</td><td class="zt" title="${top}">${top}</td></tr>`;
+  };
+
+  let rows = fc.features
+    .map(f=>({name:f.properties.name, recs:bucket[f.properties.name], color:colorsMap[f.properties.name]}))
+    .sort((a,b)=>b.recs.length-a.recs.length)
+    .map(z=>rowFor(z.name, z.recs, z.color)).join("");
+  if(showOutside && outside.length) rows += rowFor("Outside", outside, null);
+
+  return `<div class="xtab-wrap"><table class="cmptab">
+      <tr><th class="zl">Zone</th><th>Signs</th><th>Diversity</th><th>Multiling.</th><th>Top languages</th></tr>
+      ${rows}</table></div>
+    <div class="xtab-note">Simpson diversity &amp; % multilingual over the signs inside each zone.</div>`;
 }
 
 // ====== DYNAMIC FILTER UI ======
@@ -19578,7 +19618,11 @@ function renderDashboard(records){
       <div class="dash-ctl">rows <select id="dashRow">${catOptions(xRow)}</select>
         × cols <select id="dashCol">${catOptions(xCol)}</select></div>
       <div id="dashXtab">${crossTabHTML(records, xRow, xCol)}</div>
-    </div>`;
+    </div>
+    ${DISTRICTS.features.length ? `<div class="dash-sec">
+      <h5>District comparison</h5>
+      <div id="dashDist">${zoneComparisonHTML(records, DISTRICTS, DISTRICT_COLORS, false)}</div>
+    </div>` : ""}`;
   document.getElementById("dashComp").onchange = e=>{
     compCat = e.target.value;
     document.getElementById("dashBars").innerHTML = compositionHTML(lastVisible, compCat);
