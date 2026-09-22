@@ -268,17 +268,20 @@ h1,h2,.mono,.count,button,label,select,.legend{font-family:"IBM Plex Mono",monos
 }
 .zoom-wrapper {
   position: relative;
-  display: inline-block;
-  line-height: 0;
-  max-width: 96%;
-  max-height: 96%;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 #zoom-img {
   display: block;
   width: auto;
   height: auto;
-  max-width: 92vw;
-  max-height: 88vh;
+  /* fit the overlay's container (the map area), not the whole viewport, so wide
+     (landscape) photos don't overflow and throw the polygon overlay off */
+  max-width: 100%;
+  max-height: 100%;
   user-select: none;
   pointer-events: auto;
   box-shadow: 0 10px 30px rgba(0,0,0,0.8);
@@ -529,7 +532,7 @@ table.cmptab .zdot{display:inline-block;width:8px;height:8px;border-radius:50%;m
 <div id="about" onclick="if(event.target.id==='about')closeAbout()">
   <div class="card">
     <h2>About this interface</h2>
-    <p class="sub">LILABI — Linguistic Landscape</p>
+    <p class="sub">Linguistic Landscape of Bishkek and Helsinki</p>
     <p>An interactive map of photographed public signs. It currently covers <span id="about-cities">multiple cities</span>, with more to be added over time. Each point on the map is a sign; the three panels are the <strong>filters</strong> (left), the <strong>map</strong> (centre) and the <strong>analysis / detail</strong> panel (right). You can drag the two dividers to resize the panels.</p>
 
     <h3>Choosing a city</h3>
@@ -675,7 +678,7 @@ function loadCity(key){
       const opt = document.createElement("option");
       opt.value = cat; opt.innerText = cat; colorSelect.appendChild(opt);
   });
-  currentColorCategory = CATEGORIES.includes("Discourse") ? "Discourse"
+  currentColorCategory = CATEGORIES.includes("Linguality") ? "Linguality"
       : (CATEGORIES.includes("Composition") ? "Composition"
       : (CATEGORIES[0] || null));
   colorSelect.value = currentColorCategory;
@@ -1534,6 +1537,10 @@ function showGallery(i){
         const zoomImg = document.getElementById("zoom-img");
         if (zoomImg && zoomImg.naturalWidth) {
           renderSvgOverlay("zoom-svg", page, zoomImg.naturalWidth, zoomImg.naturalHeight);
+          if (overlayNeedsCenter && document.getElementById("photo-overlay").classList.contains("active")) {
+            centerOnSigns(page, zoomImg);
+            overlayNeedsCenter = false;
+          }
         }
     };
 
@@ -1860,14 +1867,47 @@ function showGridDetail(cell){
 
 // ====== INTERACTIVE ZOOM & PAN SYSTEM FOR PHOTO OVERLAY ======
 let zoomScale = 1, posX = 0, posY = 0, isDragging = false, startX = 0, startY = 0;
+let overlayNeedsCenter = false;
 
 function openPhotoOverlay(src, title){
   const overlay = document.getElementById("photo-overlay");
   const img = document.getElementById("zoom-img");
   document.getElementById("ov-title").textContent = title || "Photo Zoom View";
+  overlayNeedsCenter = true;   // frame the sign(s) once the image has loaded
   img.src = src;
   overlay.classList.add("active");
   resetZoom();
+}
+
+// Initial framing: center + zoom on the sign(s) so wide photos don't need panning.
+// One sign -> fit that sign; several -> fit them all (centred on their mean point).
+function centerOnSigns(page, img){
+  if(!img || !img.naturalWidth) return;
+  const overlay = document.getElementById("photo-overlay");
+  const iw = img.clientWidth, ih = img.clientHeight;
+  if(!iw || !ih) return;
+  const s = iw / img.naturalWidth;                 // displayed scale (contain)
+  const stageW = overlay.clientWidth, stageH = overlay.clientHeight;
+  const imgLeft = (stageW - iw) / 2, imgTop = (stageH - ih) / 2;
+
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, any = false;
+  page.signs.forEach(sg => {
+    if (sg.polygon && sg.polygon.length) {
+      any = true;
+      sg.polygon.forEach(p => { x0=Math.min(x0,p[0]); y0=Math.min(y0,p[1]); x1=Math.max(x1,p[0]); y1=Math.max(y1,p[1]); });
+    }
+  });
+  if(!any){ resetZoom(); return; }
+
+  const bw = Math.max(1, x1-x0), bh = Math.max(1, y1-y0);
+  let Z = Math.min(stageW * 0.8 / (bw*s), stageH * 0.8 / (bh*s));
+  Z = Math.max(1, Math.min(Z, 8));
+  const Px = imgLeft + ((x0+x1)/2) * s;            // union-bbox centre in stage coords
+  const Py = imgTop  + ((y0+y1)/2) * s;
+  zoomScale = Z;
+  posX = stageW/2 - Z*Px;
+  posY = stageH/2 - Z*Py;
+  updateTransform();
 }
 
 function closePhotoOverlay(){
